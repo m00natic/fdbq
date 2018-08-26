@@ -1,0 +1,3 @@
+* SQL-like operations over fixed field DBs
+
+See [[https://m00natic.github.io/lisp/manual-jit.html][Uniform Structured Syntax, Metaprogramming and Run-time Compilation]]
