@@ -9,7 +9,7 @@
    (size :accessor db-field-size :initarg :size)))
 
 (defclass operand-traits (db-field)
-  ((filter :accessor field-filter :initarg :filter :initform nil)))
+  ((filter :accessor literal-filter :initarg :filter :initform nil)))
 
 (defstruct spec
   (size 0 :type fixnum)
@@ -27,7 +27,11 @@
   (db-field-size (gethash field (spec-fields spec))))
 
 (defmacro defspec ((name type path) &rest fields)
-  `(let* ((spec (make-spec :type ,type :path ,path))
+  "Register db with NAME, TYPE (only :file supported for now) and file PATH.
+FIELDS is a list of ordered column declarations.  Field declaration may be
+a list with 2 elements - field name and byte count.  Or may be just a number
+signifying unnamed number of filler bytes."
+  `(let* ((spec (make-spec :type ,type :path (merge-pathnames ,path)))
           (spec-fields (spec-fields spec))
           (size 0))
      (dolist (field-spec ',fields)
@@ -39,6 +43,9 @@
              (incf size (db-field-size field)))))
      (setf (spec-size spec) size
            (gethash ',name *dbs*) spec)))
+
+(defgeneric get-operand-traits (operand spec)
+  (:documentation "Determine OPERAND dimensions according to SPEC."))
 
 (defmethod get-operand-traits ((operand string) spec)
   "Get dimensions of literal string OPERAND."
@@ -52,14 +59,3 @@
   (let ((field (gethash operand (spec-fields spec))))
     (make-instance 'operand-traits :offset (db-field-offset field)
                                    :size (db-field-size field))))
-
-#+or
-(defspec (recordS5x :file #P"/path/to/records5.db")
-         2
-         (cxr 2)
-         (type 1)
-         (subcode 3)
-         (date_eff 6)
-         (date_disc 6)
-         20
-         (commercial_name 16))

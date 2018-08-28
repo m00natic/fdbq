@@ -1,3 +1,43 @@
 * SQL-like operations over fixed field DBs
 
 See [[https://m00natic.github.io/lisp/manual-jit.html][Uniform Structured Syntax, Metaprogramming and Run-time Compilation]]
+
+This is a Common Lisp library which is to enable subset of SQL-like
+operations over DBs with fields/columns with fixed number of ASCII
+bytes.  Thus far it works on files in such format.
+
+** Declare DBs
+
+The defspec macro is to be used to register a DB with respective
+schema.  Here's how the article example would look like:
+
+#+BEGIN_SRC lisp
+  (defspec (recordS5         ;db name, letter case doesn't matter
+            :file            ;db type, currently only :file is supported
+            "/path/to/records5.db")     ;filename
+           ;; declare fields in order, offsets are automatically assigned
+           2                              ;2 unnamed filler bytes
+           (cxr 2)                        ;named field with 2 bytes
+           (type 1)
+           (subcode 3)
+           (date_eff 6)
+           (date_disc 6)
+           20
+           (commercial_name 16))
+#+END_SRC
+
+** Operations
+
+Here's the article example:
+
+#+BEGIN_SRC lisp
+  (select (cxr subcode commercial_name date_disc) ;list of selected fields
+          recordS5                                ;db name
+          :where (and (like cxr "YY|XX")          ;where clause
+                      (or (and (like COMMERCIAL_NAME "PET")
+                               (= type "C"))
+                          (and (= type "F")
+                               (= commercial_name "MEAL")))
+                      (< "180620" date_disc)
+                      (< date_eff date_disc)))
+#+END_SRC
