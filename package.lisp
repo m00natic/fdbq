@@ -3,4 +3,7 @@
 (defpackage #:fdbq
   (:use #:cl)
   (:export #:defspec
-           #:select))
+           #:gen-do-lines
+           #:gen-where
+           #:select
+           #:select*))

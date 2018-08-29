@@ -1,29 +1,29 @@
-* SQL-like operations over fixed field DBs
-
-See [[https://m00natic.github.io/lisp/manual-jit.html][Uniform Structured Syntax, Metaprogramming and Run-time Compilation]]
+* Fixed-length Database Query engine
 
 This is a Common Lisp library which is to enable subset of SQL-like
 operations over DBs with fields/columns with fixed number of ASCII
-bytes.  Thus far it works on files in such format.
+bytes.  It's extensible but so far supports only files.
+
+This is not a DB engine, each query is treated on its own without
+caches, indexes etc.  That said, it tries to generate near optimal
+specialized code which is then fed to the compiler before getting run.
+See [[https://m00natic.github.io/lisp/manual-jit.html][Uniform Structured Syntax, Metaprogramming and Run-time
+Compilation]].
 
 ** Declare DBs
 
-The defspec macro is to be used to register a DB with respective
+The *defspec* function is to be used to register a DB with respective
 schema.  Here's how the article example would look like:
 
 #+BEGIN_SRC lisp
-  (defspec (recordS5         ;db name, letter case doesn't matter
-            :file            ;db type, currently only :file is supported
-            "/path/to/records5.db")     ;filename
-           ;; declare fields in order, offsets are automatically assigned
-           2                              ;2 unnamed filler bytes
-           (cxr 2)                        ;named field with 2 bytes
-           (type 1)
-           (subcode 3)
-           (date_eff 6)
-           (date_disc 6)
-           20
-           (commercial_name 16))
+  (defspec 'recordS5         ;db identifier symbol
+           :file            ;db type, currently only :file is supported
+           ;; declare list of fields in order, offsets are automatically assigned
+           '(2                             ;2 unnamed filler bytes
+             (cxr 2)                       ;named field with 2 bytes
+             (type 1) (subcode 3) (date_eff 6) (date_disc 6) 20
+             (commercial_name 16))
+           :path "/path/to/records5.db")  ;filename
 #+END_SRC
 
 ** Operations
@@ -41,3 +41,38 @@ Here's the article example:
                       (< "180620" date_disc)
                       (< date_eff date_disc)))
 #+END_SRC
+
+The *select* macro is meant for REPL usage.  There also exists
+analogous *select** function which is targeted for programmatic use.
+
+* Extensibility
+
+** Add storage types
+
+While only file DBs are currently supported, there should be enough
+machinery to allow extending it to other storage types without too
+much work.  Of course as long as the fixed length format is kept.
+Here's what has to be done:
+
+- create new class which inherits *spec* adding whatever additional
+  information is needed
+
+- implement appropriate *defspec* method
+
+- implement appropriate *gen-do-lines* method over this new spec class
+
+That should be it.  Have a look at *storage-file.lisp* for a reference.
+
+** Add operations
+
+While only subset of select-like functionality is currently present,
+there are some useful building blocks to help building other
+operations.  Here's what's available:
+
+- *gen-do-lines* provides the generic abstraction to iterate over db
+  entries
+
+- *gen-where* translates WHERE tree to concrete code; it's meant to be
+  used within the body of *gen-do-lines*
+
+Look at *gen-select* for an example.
