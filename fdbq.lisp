@@ -2,16 +2,25 @@
 
 (in-package #:fdbq)
 
+
+(defun select* (field-list db &key where)
+  "Select FIELD-LIST from DB with WHERE filter."
+  (funcall (compile nil (gen-select field-list db where))))
+
+(defmacro select (field-list db &key where)
+  "Select FIELD-LIST from DB with WHERE filter."
+  `(funcall (compile nil ,(gen-select field-list db where))))
+
 (defun gen-select (field-list db where)
   "Generate selection procedure for FIELD-LIST from DB with WHERE filter."
   (let ((spec (get-spec db)))  ;pull out the specification for this db
     `(lambda () (declare (optimize (speed 3) (debug 0) (safety 0) (compilation-speed 0)))
        ,(gen-do-lines spec 'line
-          ;; if where is empty, condition is considered always satisfied
-          `((when ,(or (gen-where where 'line spec 'buffer 'offset) t)
-              ,(gen-print-selection field-list 'line spec
-                                    'buffer 'offset)))
-          :buffer-var 'buffer :offset-var 'offset))))
+                      ;; if where is empty, condition is considered always satisfied
+                      `((when ,(or (gen-where where 'line spec 'buffer 'offset) t)
+                          ,(gen-print-selection field-list 'line spec
+                                                'buffer 'offset)))
+                      :buffer-var 'buffer :offset-var 'offset))))
 
 (defun gen-print-selection (fields line-var spec
                             &optional buffer-var offset-var)
@@ -37,10 +46,22 @@ OFFSET-VAR is symbol representing the current offset in the db buffer."
                                                  (field-size field spec)))))
      (format t "|~%")))
 
-(defun select* (field-list db &key where)
-  "Select FIELD-LIST from DB with WHERE filter."
-  (funcall (compile nil (gen-select field-list db where))))
+(defun prob* (db &key where (jobs 1))
+  "Count FIELD-LIST from DB with WHERE filter."
+  (funcall (compile nil (gen-prob db where jobs))))
 
-(defmacro select (field-list db &key where)
-  "Select FIELD-LIST from DB with WHERE filter."
-  `(funcall (compile nil ,(gen-select field-list db where))))
+(defmacro prob (db &key where (jobs 1))
+  "Count FIELD-LIST from DB with WHERE filter."
+  `(funcall (compile nil ,(gen-prob db where jobs))))
+
+(defun gen-prob (db where jobs)
+  "Generate count procedure over DB with WHERE filter."
+  (let ((spec (get-spec db)))  ;pull out the specification for this db
+    `(lambda () (declare (optimize (speed 3) (debug 0) (safety 0) (compilation-speed 0)))
+       ,(gen-do-lines spec 'line
+                      ;; if where is empty, condition is considered always satisfied
+                      `((when ,(or (gen-where where 'line spec 'buffer 'offset) t)
+                          (incf result)))
+                      :buffer-var 'buffer :offset-var 'offset
+                      :reduce-fn '+ :jobs jobs
+                      :result-var 'result :result-initarg 0 :result-type 'fixnum))))

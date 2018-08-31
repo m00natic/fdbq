@@ -61,7 +61,9 @@ Additional ARGS depend on type."))
                                    :size (db-field-size field))))
 
 (defgeneric gen-do-lines (spec line-var body
-                          &key buffer-var offset-var &allow-other-keys)
+                          &key buffer-var offset-var
+                            result-var result-type result-initarg
+                            jobs reduce-fn &allow-other-keys)
   (:documentation "Generator of generic entry iteration code over BODY
 with LINE-VAR bound to current line string.
 If non-nil BUFFER-VAR and OFFSET-VAR bind them to raw byte buffer and

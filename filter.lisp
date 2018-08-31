@@ -100,12 +100,12 @@ This a bit pessimistic."
              `(progn
                 (loop for i fixnum from ,offset1
                         below ,(+ offset1 size1)
-                      for j fixnum from (+ ,offset-var ,offset1)
+                      for j fixnum from (the fixnum (+ ,offset-var ,offset1))
                       do (setf (aref ,line-var i)
                                (code-char (aref ,buffer-var j))))
                 (loop for i fixnum from ,offset2
                         below ,(+ offset2 size2)
-                      for j fixnum from (+ ,offset-var ,offset2)
+                      for j fixnum from (the fixnum (+ ,offset-var ,offset2))
                       do (setf (aref ,line-var i)
                                (code-char (aref ,buffer-var j))))
                 (cl-ppcre:scan (subseq ,line-var ,offset2
@@ -115,12 +115,12 @@ This a bit pessimistic."
             ((simple-regex? filter2) ;use plain search instead of regex
              `(search ,(ascii:string-to-ub filter2) ,buffer-var
                       :start1 ,offset2 :end1 ,(+ offset2 size2)
-                      :start2 (+ ,offset-var ,offset1)
-                      :end2 (+ ,offset-var ,(+ offset1 size1))))
+                      :start2 (the fixnum (+ ,offset-var ,offset1))
+                      :end2 (the fixnum (+ ,offset-var ,(+ offset1 size1)))))
             (t `(progn
                   (loop for i fixnum from ,offset1
                           below ,(+ offset1 size1)
-                        for j fixnum from (+ ,offset-var ,offset1)
+                        for j fixnum from (the fixnum (+ ,offset-var ,offset1))
                         do (setf (aref ,line-var i)
                                  (code-char (aref ,buffer-var j))))
                   (cl-ppcre:scan ,filter2 ,line-var :start ,offset1
@@ -136,10 +136,10 @@ This a bit pessimistic."
             (list (translate-op op t)
                   (if filter1           ;string literal?
                       (char-code (aref filter1 0))
-                      `(aref ,buffer-var (+ ,offset-var ,offset1)))
+                      `(aref ,buffer-var (the fixnum (+ ,offset-var ,offset1))))
                   (if filter2
                       (char-code (aref filter2 0))
-                      `(aref ,buffer-var (+ ,offset-var ,offset2))))
+                      `(aref ,buffer-var (the fixnum (+ ,offset-var ,offset2)))))
             `(,(translate-op op)
               ,(if filter1
                    (ascii:string-to-ub filter1)
@@ -148,10 +148,10 @@ This a bit pessimistic."
                    (ascii:string-to-ub filter2)
                    buffer-var)
               ,@(if filter1
-                    (list :start1 offset1 :end1 (+ offset1 size))
-                    `(:start1 (+ ,offset-var ,offset1)
-                      :end1 (+ ,offset-var ,(+ offset1 size))))
+                    (list :start1 offset1 :end1 (the fixnum (+ offset1 size)))
+                    `(:start1 (the fixnum (+ ,offset-var ,offset1))
+                      :end1 (the fixnum (+ ,offset-var ,(+ offset1 size)))))
               ,@(if filter2
-                    (list :start2 offset2 :end2 (+ offset2 size))
-                    `(:start2 (+ ,offset-var ,offset2)
-                      :end2 (+ ,offset-var ,(+ offset2 size))))))))))
+                    (list :start2 offset2 :end2 (the fixnum (+ offset2 size)))
+                    `(:start2 (the fixnum (+ ,offset-var ,offset2))
+                      :end2 (the fixnum (+ ,offset-var ,(+ offset2 size)))))))))))

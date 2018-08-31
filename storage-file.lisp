@@ -2,8 +2,8 @@
 
 (in-package #:fdbq)
 
-(defconstant +max-buffer-size+ (* 1024 6)
-  "Max chunk size to preload in bytes.")
+(defvar *buffer-size* (expt 1024 2)
+  "Bytes per job.")
 
 (defclass spec-file (spec)
   ((size :type fixnum :accessor spec-size :initform 0)
@@ -15,48 +15,84 @@
     (setf (spec-size spec) (defspec-fields spec fields)
           (gethash name *dbs*) spec)))
 
-(defmethod gen-do-lines ((spec spec-file) line-var body &key buffer-var offset-var)
+(defmethod gen-do-lines ((spec spec-file) line-var body
+                         &key buffer-var offset-var
+                           result-var result-type result-initarg
+                           (jobs 1) reduce-fn)
   "File line iteration over BODY with LINE-VAR bound to current line string.
 If non-nil BUFFER-VAR and OFFSET-VAR bind them to raw byte buffer and
 current line offset within it respectively."
   (let* ((entry-size (spec-size spec))  ;entry size is known
          (line-size (1+ entry-size))    ;add 1 for newline
-         (buffer-size (if (< line-size +max-buffer-size+)
-                          (* line-size (floor +max-buffer-size+ line-size))
-                          line-size))
-         (ins (gensym)) ;make sure the file stream variable is not visible to the body
-         (bytes (gensym))               ;-//- for number of bytes read
-         (use-only-line? (null buffer-var)))
+         (buffer-size (let ((cache-size (* jobs *buffer-size*)))
+                        (if (< line-size cache-size)
+                            (* line-size (floor cache-size line-size))
+                            line-size)))
+         (use-only-line? (null buffer-var))
+         (take-count (gensym)))
     (unless buffer-var
       (setf buffer-var (gensym)
             offset-var (gensym)))
-    `(let ((,buffer-var (make-array ,buffer-size :element-type 'ascii:ub-char)) ;allocate read
-           (,line-var (make-string ,entry-size :element-type 'base-char))) ;and line buffers
-       (declare (type (simple-array ascii:ub-char (,buffer-size)) ,buffer-var)
-                (type (simple-base-string ,entry-size) ,line-var) ;no need for newline
-                (dynamic-extent ,buffer-var ,line-var)) ;use stack allocation if possible
-       (with-open-file (,ins ,(spec-path spec) :direction :input
-                                               :element-type 'ascii:ub-char)
-         (loop for ,bytes fixnum = (read-sequence ,buffer-var ,ins) ;read as many lines
-               until (zerop ,bytes)
-               do ,(cond             ; slide offset through the buffer
-                     ((/= line-size buffer-size)
-                      `(loop for ,offset-var fixnum from 0 below (* ,line-size
-                                                                    (floor ,bytes ,line-size))
-                             by ,line-size
-                             do (progn
-                                  ,(when use-only-line?
-                                     `(loop for i fixnum from 0 below ,entry-size
-                                            for j fixnum from ,offset-var
-                                            do (setf (aref ,line-var i)
-                                                     (code-char (aref ,buffer-var j)))))
-                                  ,@body)))
-                     (use-only-line?
-                      `(progn
-                         (loop for i fixnum from 0 below ,entry-size
-                               do (setf (aref ,line-var i)
-                                        (code-char (aref ,buffer-var i))))
-                         ,@body))
-                     (t `(let ((,offset-var 0))
-                           (declare (type fixnum ,offset-var))
-                           ,@body))))))))
+    (unless result-var
+      (setf result-var (gensym)))
+    `(let ((,buffer-var (make-array ,buffer-size :element-type 'ascii:ub-char)))
+       (declare (type (simple-array ascii:ub-char (,buffer-size)) ,buffer-var))
+       (flet ((mapper (,offset-var ,take-count)
+                (declare (optimize (speed 3) (debug 0) (safety 0) (compilation-speed 0))
+                         (type fixnum ,offset-var ,take-count))
+                (let ((,line-var (make-string ,entry-size :element-type 'base-char)) ;and line buffers
+                      (,result-var ,result-initarg))
+                  (declare (type (simple-base-string ,entry-size) ,line-var) ;no need for newline
+                           ,(if result-type
+                                `(type ,result-type ,result-var)
+                                `(ignorable ,result-var))
+                           (dynamic-extent ,line-var) ;use stack allocation if possible
+                           (ignorable ,line-var))
+                  (loop for ,offset-var fixnum from ,offset-var by ,line-size
+                        repeat ,take-count
+                        do (progn
+                             ,(when use-only-line?
+                                `(loop for i fixnum from 0 below ,entry-size
+                                       for j fixnum from ,offset-var
+                                       do (setf (aref ,line-var i)
+                                                (code-char (aref ,buffer-var j)))))
+                             ,@body))
+                  ,result-var)))
+         (let* ((result ,result-initarg)
+                (lparallel:*kernel* (lparallel:make-kernel ,jobs))
+                (chan (lparallel:make-channel)))
+           (declare ,(if result-type
+                         `(type ,result-type result)
+                         `(ignorable result))
+                    (ignorable chan))
+           (unwind-protect
+                (with-open-file (ins ,(spec-path spec) :direction :input
+                                                       :element-type 'ascii:ub-char)
+                  (loop for bytes fixnum = (read-sequence ,buffer-var ins) ;read as many lines
+                        until (zerop bytes)
+                        do ,(cond ((< 1 jobs)
+                                   `(progn
+                                      (multiple-value-bind (take-count correction)
+                                          (ceiling (the fixnum (/ bytes ,line-size)) ,jobs)
+                                        (declare (type fixnum take-count correction))
+                                        (let ((batch-size (* take-count ,line-size)))
+                                          (loop for offset fixnum from 0 by batch-size
+                                                repeat ,(1- jobs)
+                                                do (lparallel:submit-task chan #'mapper
+                                                                          offset take-count))
+                                          (lparallel:submit-task chan #'mapper
+                                                                 (* ,(1- jobs) batch-size)
+                                                                 (+ take-count correction))))
+                                      (lparallel:do-fast-receives (res chan ,jobs)
+                                        ,(when reduce-fn
+                                           `(setf result (,reduce-fn result
+                                                                     ,(if result-type
+                                                                          `(the ,result-type res)
+                                                                          'res)))))))
+                                  (reduce-fn
+                                   `(setf result (,reduce-fn result
+                                                             (mapper 0 (floor bytes
+                                                                              ,line-size)))))
+                                  (t `(mapper 0 (floor bytes ,line-size))))))
+             (lparallel:end-kernel))
+           result)))))
