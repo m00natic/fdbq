@@ -17,7 +17,7 @@
 (defmethod gen-do-lines ((spec spec-file) line-var body
                          &key buffer-var offset-var
                            result-var result-type result-initarg (jobs 1) reduce-fn)
-  "File line iteration."
+  "File db iteration."
   (let* ((entry-size (spec-size spec))  ;entry size is known
          (line-size (1+ entry-size))    ;add 1 for newline
          (buffer-size (let ((cache-size (* jobs *buffer-size*)))
@@ -32,14 +32,12 @@
     (unless result-var
       (setf result-var (gensym)))
     `(let ((,buffer-var (make-array ,buffer-size :element-type 'ascii:ub-char)))
-       (declare (type (simple-array ascii:ub-char (,buffer-size)) ,buffer-var))
        (flet ((mapper (,offset-var ,take-count)
                 (declare (optimize (speed 3) (debug 0) (safety 0) (compilation-speed 0))
                          (type fixnum ,offset-var ,take-count))
-                (let ((,line-var (make-string ,entry-size :element-type 'base-char)) ;and line buffers
+                (let ((,line-var (make-string ,entry-size :element-type 'base-char))
                       (,result-var ,result-initarg))
-                  (declare (type (simple-base-string ,entry-size) ,line-var) ;no need for newline
-                           ,(if result-type
+                  (declare ,(if result-type
                                 `(type ,result-type ,result-var)
                                 `(ignorable ,result-var))
                            (dynamic-extent ,line-var) ;use stack allocation if possible
@@ -64,7 +62,7 @@
            (unwind-protect
                 (with-open-file (ins ,(spec-path spec) :direction :input
                                                        :element-type 'ascii:ub-char)
-                  (loop for bytes fixnum = (read-sequence ,buffer-var ins) ;read as many lines
+                  (loop for bytes fixnum = (read-sequence ,buffer-var ins)
                         until (zerop bytes)
                         do ,(cond ((< 1 jobs)
                                    `(progn

@@ -132,26 +132,39 @@ This a bit pessimistic."
   (with-slots ((offset1 offset) (size1 size) (filter1 filter)) field1
     (with-slots ((offset2 offset) (size2 size) (filter2 filter)) field2
       (let ((size (min size1 size2)))
-        (if (= 1 size)           ;optimize single character comparison
-            (list (translate-op op t)
-                  (if filter1           ;string literal?
-                      (char-code (aref filter1 0))
-                      `(aref ,buffer-var (the fixnum (+ ,offset-var ,offset1))))
-                  (if filter2
-                      (char-code (aref filter2 0))
-                      `(aref ,buffer-var (the fixnum (+ ,offset-var ,offset2)))))
-            `(,(translate-op op)
-              ,(if filter1
-                   (ascii:string-to-ub filter1)
-                   buffer-var)
-              ,(if filter2
-                   (ascii:string-to-ub filter2)
-                   buffer-var)
-              ,@(if filter1
-                    (list :start1 offset1 :end1 (the fixnum (+ offset1 size)))
-                    `(:start1 (the fixnum (+ ,offset-var ,offset1))
-                      :end1 (the fixnum (+ ,offset-var ,(+ offset1 size)))))
-              ,@(if filter2
-                    (list :start2 offset2 :end2 (the fixnum (+ offset2 size)))
-                    `(:start2 (the fixnum (+ ,offset-var ,offset2))
-                      :end2 (the fixnum (+ ,offset-var ,(+ offset2 size)))))))))))
+        (cond ((= 1 size)           ;optimize single character comparison
+               (list (translate-op op t)
+                     (if filter1           ;string literal?
+                         (char-code (aref filter1 0))
+                         `(aref ,buffer-var (the fixnum (+ ,offset-var ,offset1))))
+                     (if filter2
+                         (char-code (aref filter2 0))
+                         `(aref ,buffer-var (the fixnum (+ ,offset-var ,offset2))))))
+              ((and (or filter1 filter2) (member op '(= /=)))
+               `(and ,@(loop for i from 0 below size ;unroll exact comparison
+                             collect (list op
+                                           (if filter1
+                                               (char-code (aref filter1 i))
+                                               `(aref ,buffer-var
+                                                      (the fixnum (+ ,offset-var
+                                                                     ,(+ offset1 i)))))
+                                           (if filter2
+                                               (char-code (aref filter2 i))
+                                               `(aref ,buffer-var
+                                                      (the fixnum (+ ,offset-var
+                                                                     ,(+ offset2 i)))))))))
+              (t `(,(translate-op op)
+                   ,(if filter1
+                        (ascii:string-to-ub filter1)
+                        buffer-var)
+                   ,(if filter2
+                        (ascii:string-to-ub filter2)
+                        buffer-var)
+                   ,@(if filter1
+                         (list :start1 offset1 :end1 (the fixnum (+ offset1 size)))
+                         `(:start1 (the fixnum (+ ,offset-var ,offset1))
+                           :end1 (the fixnum (+ ,offset-var ,(+ offset1 size)))))
+                   ,@(if filter2
+                         (list :start2 offset2 :end2 (the fixnum (+ offset2 size)))
+                         `(:start2 (the fixnum (+ ,offset-var ,offset2))
+                           :end2 (the fixnum (+ ,offset-var ,(+ offset2 size))))))))))))
