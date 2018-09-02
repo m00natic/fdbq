@@ -6,22 +6,18 @@
   "Bytes per job.")
 
 (defclass spec-file (spec)
-  ((size :type fixnum :accessor spec-size :initform 0)
-   (path :type pathname :accessor spec-path :initarg :path)))
+  ((path :type pathname :accessor spec-path :initarg :path)))
 
 (defmethod defspec (name (type (eql :file)) fields &key path)
   "Register file DB with NAME, list of FIELDS and file PATH."
   (let ((spec (make-instance 'spec-file :path (merge-pathnames path))))
-    (setf (spec-size spec) (defspec-fields spec fields)
-          (gethash name *dbs*) spec)))
+    (defspec-fields spec fields)
+    (setf (gethash name *dbs*) spec)))
 
 (defmethod gen-do-lines ((spec spec-file) line-var body
                          &key buffer-var offset-var
-                           result-var result-type result-initarg
-                           (jobs 1) reduce-fn)
-  "File line iteration over BODY with LINE-VAR bound to current line string.
-If non-nil BUFFER-VAR and OFFSET-VAR bind them to raw byte buffer and
-current line offset within it respectively."
+                           result-var result-type result-initarg (jobs 1) reduce-fn)
+  "File line iteration."
   (let* ((entry-size (spec-size spec))  ;entry size is known
          (line-size (1+ entry-size))    ;add 1 for newline
          (buffer-size (let ((cache-size (* jobs *buffer-size*)))

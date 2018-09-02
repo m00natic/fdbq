@@ -26,6 +26,9 @@ schema.  Here's how the article example would look like:
            :path "/path/to/records5.db")  ;filename
 #+END_SRC
 
+If a DB uses 2 bytes for end of line, 1 extra filler byte should be
+declared.
+
 ** Operations
 
 Here's the article example:

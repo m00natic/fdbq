@@ -6,15 +6,16 @@
   "Registered DBs.")
 
 (defclass db-field ()
-  ((offset :type fixnum :accessor db-field-offset :initarg :offset)
-   (size :type fixnum :accessor db-field-size :initarg :size)))
+  ((offset :type fixnum :reader db-field-offset :initarg :offset)
+   (size :type fixnum :reader db-field-size :initarg :size)))
 
 (defclass operand-traits (db-field)
-  ((filter :accessor literal-filter :initarg :filter :initform nil)))
+  ((filter :initarg :filter :initform nil)))
 
 (defclass spec ()
   ((fields :type hash-table :accessor spec-fields
-           :initform (make-hash-table :test 'eq)))
+           :initform (make-hash-table :test 'eq))
+   (size :type fixnum :accessor spec-size :initform 0))
   (:documentation "DB specification base information.
 Contains named fields with offsets and sizes."))
 
@@ -32,7 +33,7 @@ Contains named fields with offsets and sizes."))
 Additional ARGS depend on type."))
 
 (defun defspec-fields (spec fields)
-  "Fill SPEC schema with FIELDS and return inferred entry size."
+  "Fill SPEC schema with FIELDS and inferred entry size."
   (let ((spec-fields (spec-fields spec))
         (size 0))
     (dolist (field-spec fields)
@@ -42,7 +43,7 @@ Additional ARGS depend on type."))
                                                 :size (second field-spec))))
             (setf (gethash (first field-spec) spec-fields) field)
             (incf size (db-field-size field)))))
-    size))
+    (setf (spec-size spec) size)))
 
 (defgeneric get-operand-traits (operand spec)
   (:documentation "Determine OPERAND dimensions according to SPEC."))
@@ -67,4 +68,8 @@ Additional ARGS depend on type."))
   (:documentation "Generator of generic entry iteration code over BODY
 with LINE-VAR bound to current line string.
 If non-nil BUFFER-VAR and OFFSET-VAR bind them to raw byte buffer and
-current line offset within it respectively."))
+current line offset within it respectively.
+RESULT-VAR with optionally specified RESULT-TYPE and initial value
+RESULT-INITARG can be used to gather information over the whole iteration.
+Number of parallel JOBS may be specified.
+REDUCE-FN can be used to reduce results over 2 jobs."))
