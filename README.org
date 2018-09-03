@@ -1,14 +1,13 @@
 * Fixed-length Database Query engine
 
-This is a Common Lisp library which is to enable subset of SQL-like
-operations over DBs with fields/columns with fixed number of ASCII
-bytes.  It's extensible but so far supports only files.
+This is portable Common Lisp library which is to enable subset of
+SQL-like operations over DBs with fields/columns with fixed number of
+ASCII bytes.  It's extensible but so far supports only flat file DBs.
 
 This is not a DB engine, each query is treated on its own without
 caches, indexes etc.  That said, it tries to generate near optimal
 specialized code which is then fed to the compiler before getting run.
-See [[https://m00natic.github.io/lisp/manual-jit.html][Uniform Structured Syntax, Metaprogramming and Run-time
-Compilation]].
+See [[https://m00natic.github.io/lisp/manual-jit.html][Uniform Structured Syntax, Metaprogramming and Run-time Compilation]].
 
 ** Declare DBs
 
@@ -31,7 +30,7 @@ declared.
 
 ** Operations
 
-Here's the article example:
+Here's variation on the article example:
 
 #+BEGIN_SRC lisp
   (select (cxr subcode commercial_name date_disc) ;list of selected fields
@@ -42,11 +41,15 @@ Here's the article example:
                           (and (= type "F")
                                (= commercial_name "MEAL")))
                       (< "180620" date_disc)
-                      (< date_eff date_disc)))
+                      (< date_eff date_disc))
+          :jobs 4                         ;parallelize
+          :print nil)        ;return list of results instead of printing
 #+END_SRC
 
-The *select* macro is meant for REPL usage.  There also exists
-analogous *select** function which is targeted for programmatic use.
+The *select* macro is meant for REPL usage.  There's also analogous
+*select** function which is targeted for programmatic use.
+
+There are also *cnt* and *cnt** which just count matched entries.
 
 * Extensibility
 
@@ -64,7 +67,16 @@ Here's what has to be done:
 
 - implement appropriate *gen-do-lines* method over this new spec class
 
-That should be it.  Have a look at *storage-file.lisp* for a reference.
+That is the minimum.  You'll have to see if the default
+implementations of *gen-select*, *gen-print-selection*,
+*gen-list-selection* and *gen-cnt* suit your *gen-do-lines*
+implementation.  The default implementations expect fully populated
+string line.
+
+As an example for customization, have a look at *storage-file.lisp*
+where the file db implementation takes advantage of additional byte
+buffer (while mostly ignoring the string line) and because of this
+adds method specializations.
 
 ** Add operations
 
@@ -79,3 +91,15 @@ operations.  Here's what's available:
   used within the body of *gen-do-lines*
 
 Look at *gen-select* for an example.
+
+* Future TODO
+
+** SQL *IN* operator
+
+** Embedded statements
+
+** Joins
+
+** Group by
+
+** Order by

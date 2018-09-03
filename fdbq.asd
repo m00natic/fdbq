@@ -10,5 +10,6 @@
   :components ((:file "package")
                (:file "spec")
                (:file "filter")
+               (:file "utils")
                (:file "storage-file")
                (:file "fdbq")))

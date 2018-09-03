@@ -3,9 +3,14 @@
 (defpackage #:fdbq
   (:use #:cl)
   (:export #:defspec
-           #:gen-do-lines
-           #:gen-where
            #:select
            #:select*
            #:cnt
-           #:cnt*))
+           #:cnt*
+           #:gen-where
+           #:gen-do-lines
+           #:gen-select
+           #:gen-print-selection
+           #:gen-list-selection
+           #:gen-print-select-results
+           #:gen-cnt))

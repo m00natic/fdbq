@@ -60,16 +60,3 @@ Additional ARGS depend on type."))
   (let ((field (gethash operand (spec-fields spec))))
     (make-instance 'operand-traits :offset (db-field-offset field)
                                    :size (db-field-size field))))
-
-(defgeneric gen-do-lines (spec line-var body
-                          &key buffer-var offset-var
-                            result-var result-type result-initform
-                            jobs reduce-fn &allow-other-keys)
-  (:documentation "Generator of generic entry iteration code over BODY
-with LINE-VAR bound to current line string.
-If non-nil BUFFER-VAR and OFFSET-VAR bind them to raw byte buffer and
-current line offset within it respectively.
-RESULT-VAR with optionally specified RESULT-TYPE and initial value
-RESULT-INITFORM can be used to gather information over the whole iteration.
-Number of parallel JOBS may be specified.
-REDUCE-FN can be used to reduce results over 2 jobs."))

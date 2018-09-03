@@ -14,26 +14,91 @@
     (defspec-fields spec fields)
     (setf (gethash name *dbs*) spec)))
 
+(defmethod gen-select ((spec spec-file) field-list where print jobs)
+  "Generate selection procedure for FIELD-LIST from DB with WHERE filter."
+  `(lambda () (declare (optimize (speed 3) (debug 0) (safety 0) (compilation-speed 0)))
+     ,(if (and print (= 1 jobs))
+          (gen-do-lines spec 'line
+                        `((when ,(or (gen-where where 'line spec 'buffer 'offset) t)
+                            ,(gen-print-selection spec field-list 'line
+                                                  :buffer-var 'buffer
+                                                  :offset-var 'offset)))
+                        :buffer-var 'buffer :offset-var 'offset)
+          `(let ((res ,(gen-do-lines spec 'line
+                                     `((when ,(or (gen-where where 'line spec 'buffer 'offset) t)
+                                         ,(gen-list-selection spec field-list 'line 'result
+                                                              :buffer-var 'buffer
+                                                              :offset-var 'offset)))
+                                     :buffer-var 'buffer :offset-var 'offset
+                                     :reduce-fn 'nconc :jobs jobs
+                                     :result-var 'result :result-initform nil
+                                     :result-type 'list)))
+             ,(if print
+                  (gen-print-select-results 'res (length field-list))
+                  'res)))))
+
+(defmethod gen-print-selection ((spec spec-file) fields line-var
+                                &key buffer-var offset-var)
+  "Unroll selected FIELDS' print statements.
+LINE-VAR is symbol representing the current line variable.
+SPEC holds field offset details.
+BUFFER-VAR is symbol representing the db buffer.
+OFFSET-VAR is symbol representing the current offset in the db buffer."
+  (declare (ignore line-var))
+  `(progn
+     ,@(loop for field in fields ;collect print statements in list and splice them
+             collect '(write-char #\|)
+             collect `(loop for i fixnum from (+ ,offset-var
+                                                 ,(field-offset field spec))
+                              below (+ ,offset-var ,(+ (field-offset field spec)
+                                                       (field-size field spec)))
+                            do (write-char (code-char (aref ,buffer-var i)))))
+     (format t "|~%")))
+
+(defmethod gen-list-selection ((spec spec-file) fields line-var result
+                               &key buffer-var offset-var)
+  "Unroll selected FIELDS' gather statements.
+LINE-VAR is symbol representing the current line variable.
+SPEC holds field offset details."
+  (declare (ignore line-var))
+  `(let ((res (make-array ,(length fields))))
+     ,@(loop for field in fields
+             for i from 0
+             collect `(setf (aref res ,i)
+                            (let ((field-str (make-string ,(field-size field spec)
+                                                          :element-type 'base-char)))
+                              (loop for i fixnum from 0 below ,(field-size field spec)
+                                    for j fixnum from (+ ,offset-var ,(field-offset field spec))
+                                    do (setf (aref field-str i) (code-char (aref ,buffer-var j))))
+                              field-str)))
+     (setf ,result (nconc ,result (list res)))))
+
+(defmethod gen-cnt ((spec spec-file) where jobs)
+  "Generate count procedure over DB with WHERE filter over file."
+  `(lambda () (declare (optimize (speed 3) (debug 0) (safety 0) (compilation-speed 0)))
+     ,(gen-do-lines spec 'line
+                    `((when ,(or (gen-where where 'line spec 'buffer 'offset) t)
+                        (incf result)))
+                    :buffer-var 'buffer :offset-var 'offset
+                    :reduce-fn '+ :jobs jobs
+                    :result-var 'result :result-initform 0 :result-type 'fixnum)))
+
 (defmethod gen-do-lines ((spec spec-file) line-var body
-                         &key buffer-var offset-var
-                           result-var result-type result-initform (jobs 1) reduce-fn)
-  "File db iteration."
+                         &key (result-var (gensym)) result-type result-initform
+                           (jobs 1) reduce-fn
+                           (buffer-var (gensym)) (offset-var (gensym)))
+  "File db iteration.  BUFFER-VAR and OFFSET-VAR get bound
+to raw byte buffer and current line offset within it respectively."
   (let* ((entry-size (spec-size spec))  ;entry size is known
          (line-size (1+ entry-size))    ;add 1 for newline
          (buffer-size (let ((cache-size (* jobs *buffer-size*)))
                         (if (< line-size cache-size)
                             (* line-size (floor cache-size line-size))
                             line-size)))
-         (use-only-line? (null buffer-var))
          (threading? (< 1 jobs))
          (take-count (gensym))
          (job-results (gensym))
          (job-id (gensym)))
-    (unless buffer-var
-      (setf buffer-var (gensym)
-            offset-var (gensym)))
-    (unless result-var
-      (setf result-var (gensym)))
     `(let ((,buffer-var (make-array ,buffer-size :element-type 'ascii:ub-char))
            (,job-results ,(when threading?
                             `(make-array ,jobs :element-type '(cons bit ,(or result-type t))
@@ -59,18 +124,11 @@
                            (ignorable ,line-var))
                   (loop for ,offset-var fixnum from ,offset-var by ,line-size
                         repeat ,take-count
-                        do (progn
-                             ,(when use-only-line?
-                                `(loop for i fixnum from 0 below ,entry-size
-                                       for j fixnum from ,offset-var
-                                       do (setf (aref ,line-var i)
-                                                (code-char (aref ,buffer-var j)))))
-                             ,@body))
+                        do ,@body)
                   ,(if threading?
                        `(let ((job-result (aref ,job-results ,job-id)))
                           (setf (car job-result) 1
-                                (cdr job-result) ,result-var)
-                          job-result)
+                                (cdr job-result) ,result-var))
                        result-var))))
          (let* ((result ,result-initform)
                 (lparallel:*kernel* ,(when threading?
@@ -100,8 +158,7 @@
                                                                  (* ,(1- jobs) batch-size)
                                                                  (+ take-count correction)
                                                                  ,(1- jobs))))
-                                      ;; reduce thread results in order, as soon as they come
-                                      (let ((i 0))
+                                      (let ((i 0)) ;reduce thread results in order
                                         (declare (type fixnum i))
                                         (lparallel:do-fast-receives (res chan ,jobs)
                                           (declare (ignore res))
