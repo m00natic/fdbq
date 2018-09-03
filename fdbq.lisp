@@ -46,15 +46,15 @@ OFFSET-VAR is symbol representing the current offset in the db buffer."
                                                  (field-size field spec)))))
      (format t "|~%")))
 
-(defun prob* (db &key where (jobs 1))
+(defun cnt* (db &key where (jobs 1))
   "Count FIELD-LIST from DB with WHERE filter."
-  (funcall (compile nil (gen-prob db where jobs))))
+  (funcall (compile nil (gen-cnt db where jobs))))
 
-(defmacro prob (db &key where (jobs 1))
+(defmacro cnt (db &key where (jobs 1))
   "Count FIELD-LIST from DB with WHERE filter."
-  `(funcall (compile nil ,(gen-prob db where jobs))))
+  `(funcall (compile nil ,(gen-cnt db where jobs))))
 
-(defun gen-prob (db where jobs)
+(defun gen-cnt (db where jobs)
   "Generate count procedure over DB with WHERE filter."
   (let ((spec (get-spec db)))  ;pull out the specification for this db
     `(lambda () (declare (optimize (speed 3) (debug 0) (safety 0) (compilation-speed 0)))
@@ -64,4 +64,4 @@ OFFSET-VAR is symbol representing the current offset in the db buffer."
                           (incf result)))
                       :buffer-var 'buffer :offset-var 'offset
                       :reduce-fn '+ :jobs jobs
-                      :result-var 'result :result-initarg 0 :result-type 'fixnum))))
+                      :result-var 'result :result-initform 0 :result-type 'fixnum))))

@@ -6,4 +6,6 @@
            #:gen-do-lines
            #:gen-where
            #:select
-           #:select*))
+           #:select*
+           #:cnt
+           #:cnt*))
