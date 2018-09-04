@@ -30,9 +30,11 @@
                                                               :buffer-var 'buffer
                                                               :offset-var 'offset)))
                                      :buffer-var 'buffer :offset-var 'offset
-                                     :reduce-fn 'nconc :jobs jobs
-                                     :result-var 'result :result-initform nil
-                                     :result-type 'list)))
+                                     :reduce-fn 'append-vec :jobs jobs
+                                     :result-var 'result
+                                     :result-initform '(make-array 0 :fill-pointer t)
+                                     :result-type `(vector (simple-array simple-base-string
+                                                                         (,(length field-list)))))))
              ,(if print
                   (gen-print-select-results 'res (length field-list))
                   'res)))))
@@ -40,8 +42,6 @@
 (defmethod gen-print-selection ((spec spec-file) fields line-var
                                 &key buffer-var offset-var)
   "Unroll selected FIELDS' print statements.
-LINE-VAR is symbol representing the current line variable.
-SPEC holds field offset details.
 BUFFER-VAR is symbol representing the db buffer.
 OFFSET-VAR is symbol representing the current offset in the db buffer."
   (declare (ignore line-var))
@@ -58,12 +58,12 @@ OFFSET-VAR is symbol representing the current offset in the db buffer."
 (defmethod gen-list-selection ((spec spec-file) fields line-var result
                                &key buffer-var offset-var)
   "Unroll selected FIELDS' gather statements.
-LINE-VAR is symbol representing the current line variable.
-SPEC holds field offset details."
+BUFFER-VAR is symbol representing the db buffer.
+OFFSET-VAR is symbol representing the current offset in the db buffer."
   (declare (ignore line-var))
   `(let ((res (make-array ,(length fields))))
      ,@(loop for field in fields
-             for i from 0
+             for i fixnum from 0
              collect `(setf (aref res ,i)
                             (let ((field-str (make-string ,(field-size field spec)
                                                           :element-type 'base-char)))
@@ -71,7 +71,7 @@ SPEC holds field offset details."
                                     for j fixnum from (+ ,offset-var ,(field-offset field spec))
                                     do (setf (aref field-str i) (code-char (aref ,buffer-var j))))
                               field-str)))
-     (setf ,result (nconc ,result (list res)))))
+     (vector-push-extend res ,result)))
 
 (defmethod gen-cnt ((spec spec-file) where jobs)
   "Generate count procedure over DB with WHERE filter over file."

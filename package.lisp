@@ -13,4 +13,5 @@
            #:gen-print-selection
            #:gen-list-selection
            #:gen-print-select-results
+           #:append-vec
            #:gen-cnt))

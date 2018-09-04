@@ -43,7 +43,7 @@ Here's variation on the article example:
                       (< "180620" date_disc)
                       (< date_eff date_disc))
           :jobs 4                         ;parallelize
-          :print nil)        ;return list of results instead of printing
+          :print nil)       ;return array of results instead of printing
 #+END_SRC
 
 The *select* macro is meant for REPL usage.  There's also analogous

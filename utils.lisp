@@ -28,9 +28,11 @@ Default implementation using only string line."
           `(let ((res ,(gen-do-lines spec 'line
                                      `((when ,(or (gen-where where 'line spec) t)
                                          ,(gen-list-selection spec field-list 'line 'result)))
-                                     :reduce-fn 'nconc :jobs jobs
-                                     :result-var 'result :result-initform nil
-                                     :result-type 'list)))
+                                     :reduce-fn 'append-vec :jobs jobs
+                                     :result-var 'result
+                                     :result-initform '(make-array 0 :fill-pointer t)
+                                     :result-type `(vector (simple-array simple-base-string
+                                                                         (,(length field-list)))))))
              ,(if print
                   (gen-print-select-results 'res (length field-list))
                   'res)))))
@@ -55,18 +57,15 @@ SPEC holds field offset details."
 
 (defun gen-print-select-results (res-var field-count)
   "Pretty print list of results."
-  `(dolist (line ,res-var)
-     ,(let* ((fmt-size (* 3 field-count))
-             (fmt-str (make-string (+ fmt-size 3) :element-type 'base-char)))
-        (loop for i from 0 below fmt-size by 3
-              do (setf (aref fmt-str i) #\|
-                       (aref fmt-str (1+ i)) #\~
-                       (aref fmt-str (+ 2 i)) #\A))
-        (setf (aref fmt-str fmt-size) #\|
-              (aref fmt-str (1+ fmt-size)) #\~
-              (aref fmt-str (+ 2 fmt-size)) #\%)
-        `(format t ,fmt-str ,@(loop for i from 0 below field-count
-                                    collect `(aref line ,i))))))
+  `(loop for i fixnum from 0 below (length ,res-var)
+         do (let ((line (aref ,res-var i)))
+              (declare (type (simple-array simple-base-string (,field-count)) line))
+              ,(let ((fmt-str (with-output-to-string (s nil :element-type 'base-char)
+                                (loop repeat field-count
+                                      do (write-string "|~A" s))
+                                (write-string "|~%" s))))
+                 `(format t ,fmt-str ,@(loop for i fixnum from 0 below field-count
+                                             collect `(aref line ,i)))))))
 
 (defgeneric gen-list-selection (spec fields line-var result &key &allow-other-keys)
   (:documentation "Generate FIELDS selection to list over SPEC db code.
@@ -79,11 +78,11 @@ LINE-VAR is symbol representing the current line variable.
 SPEC holds field offset details."
   `(let ((res (make-array ,(length fields) :element-type 'simple-base-string)))
      ,@(loop for field in fields
-             for i from 0
+             for i fixnum from 0
              collect `(setf (aref res ,i) (subseq ,line-var ,(field-offset field spec)
                                                   :end ,(+ (field-offset field spec)
                                                            (field-size field spec)))))
-     (setf ,result (nconc ,result (list res)))))
+     (vector-push-extend res ,result)))
 
 (defgeneric gen-cnt (spec where jobs)
   (:documentation "Generate count procedure for SPEC db with WHERE filter."))
@@ -97,3 +96,11 @@ SPEC holds field offset details."
                         (incf result)))
                     :reduce-fn '+ :jobs jobs
                     :result-var 'result :result-initform 0 :result-type 'fixnum)))
+
+(defun append-vec (vec1 vec2)
+  "Append VEC2 to the end of VEC1."
+  (declare (optimize (speed 3) (debug 0) (safety 0) (compilation-speed 0))
+           (type (vector (simple-array simple-base-string)) vec1 vec2))
+  (loop for el across vec2
+        do (vector-push-extend el vec1))
+  vec1)
