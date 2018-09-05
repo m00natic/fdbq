@@ -2,7 +2,7 @@
 
 (in-package #:fdbq)
 
-(defvar *buffer-size* (expt 1024 2)
+(defvar *buffer-size* (/ (expt 1024 2) 2)
   "Bytes per job.")
 
 (defclass spec-file (spec)
@@ -86,99 +86,119 @@ OFFSET-VAR is symbol representing the current offset in the db buffer."
 (defmethod gen-do-lines ((spec spec-file) line-var body
                          &key (result-var (gensym)) result-type result-initform
                            (jobs 1) reduce-fn
-                           (buffer-var (gensym)) (offset-var (gensym)))
+                           buffer-var offset-var)
   "File db iteration.  BUFFER-VAR and OFFSET-VAR get bound
 to raw byte buffer and current line offset within it respectively."
-  (let* ((entry-size (spec-size spec))  ;entry size is known
-         (line-size (1+ entry-size))    ;add 1 for newline
-         (buffer-size (let ((cache-size (* jobs *buffer-size*)))
-                        (if (< line-size cache-size)
-                            (* line-size (floor cache-size line-size))
-                            line-size)))
-         (threading? (< 1 jobs))
-         (take-count (gensym))
-         (job-results (gensym))
-         (job-id (gensym)))
-    `(let ((,buffer-var (make-array ,buffer-size :element-type 'ascii:ub-char))
-           (,job-results ,(when threading?
-                            `(make-array ,jobs :element-type '(cons bit ,(or result-type t))
-                                               :initial-contents
-                                               (list ,@(loop repeat jobs
-                                                             collect `(cons 0 ,result-initform)))))))
-       (declare ,@(if threading?
-                      `((dynamic-extent ,job-results))
-                      `((dynamic-extent ,buffer-var)
-                        (ignorable ,job-results))))
-       (flet ((mapper (,offset-var ,take-count &optional (,job-id 0))
-                (declare (optimize (speed 3) (debug 0) (safety 0) (compilation-speed 0))
-                         (type fixnum ,offset-var ,take-count)
-                         ,(if threading?
-                              `(type fixnum ,job-id)
-                              `(ignore ,job-id)))
-                (let ((,line-var (make-string ,entry-size :element-type 'base-char))
-                      (,result-var ,result-initform))
-                  (declare ,(if result-type
-                                `(type ,result-type ,result-var)
-                                `(ignorable ,result-var))
-                           (dynamic-extent ,line-var) ;use stack allocation if possible
-                           (ignorable ,line-var))
-                  (loop for ,offset-var fixnum from ,offset-var by ,line-size
-                        repeat ,take-count
-                        do ,@body)
-                  ,(if threading?
-                       `(let ((job-result (aref ,job-results ,job-id)))
-                          (setf (car job-result) 1
-                                (cdr job-result) ,result-var))
-                       result-var))))
-         (let* ((result ,result-initform)
-                (lparallel:*kernel* ,(when threading?
-                                       `(lparallel:make-kernel ,jobs)))
-                (chan ,(when threading?
-                         `(lparallel:make-channel))))
-           (declare ,(if result-type
-                         `(type ,result-type result)
-                         `(ignorable result))
-                    (ignorable chan))
-           (unwind-protect
-                (with-open-file (ins ,(spec-path spec) :direction :input
-                                                       :element-type 'ascii:ub-char)
-                  (loop for bytes fixnum = (read-sequence ,buffer-var ins)
-                        until (zerop bytes)
-                        do ,(cond (threading?
-                                   `(progn
-                                      (multiple-value-bind (take-count correction)
-                                          (ceiling (the fixnum (/ bytes ,line-size)) ,jobs)
-                                        (declare (type fixnum take-count correction))
-                                        (let ((batch-size (* take-count ,line-size)))
-                                          (loop for offset fixnum from 0 by batch-size
-                                                for i fixnum from 0 below ,(1- jobs)
-                                                do (lparallel:submit-task chan #'mapper
-                                                                          offset take-count i))
-                                          (lparallel:submit-task chan #'mapper
-                                                                 (* ,(1- jobs) batch-size)
-                                                                 (+ take-count correction)
-                                                                 ,(1- jobs))))
-                                      (let ((i 0)) ;reduce thread results in order
-                                        (declare (type fixnum i))
-                                        (lparallel:do-fast-receives (res chan ,jobs)
-                                          (declare (ignore res))
-                                          ,(when reduce-fn
-                                             `(loop for j fixnum from i below ,jobs
-                                                    do (let ((res (aref ,job-results j)))
-                                                         #1=(declare (type (cons bit ,(or result-type t)) res))
-                                                         (when (zerop (car res))
-                                                           (return))
-                                                         (incf i)
-                                                         #2=(setf result (,reduce-fn result (cdr res))
-                                                                  (car res) 0)))))
-                                        (loop for j fixnum from i below ,jobs
-                                              do (let ((res (aref ,job-results j)))
-                                                   #1# #2#)))))
-                                  (reduce-fn
-                                   `(setf result (,reduce-fn result
-                                                             (mapper 0 (floor bytes
-                                                                              ,line-size)))))
-                                  (t `(mapper 0 (floor bytes ,line-size))))))
-             ,(when threading?
-                (lparallel:end-kernel)))
-           result)))))
+  (let* ((line-size (1+ (spec-size spec)))    ;add 1 for newline
+         (buffer-size (if (< line-size *buffer-size*)
+                          (* line-size (floor *buffer-size* line-size))
+                          line-size))
+         (threading? (< 1 jobs)))
+    (alexandria:with-gensyms (file-lock buffer-array line-array
+                                        job-id job-count portion-id ins take-count)
+      `(let ((,buffer-array (make-array ,jobs :element-type '(simple-array ascii:ub-char
+                                                              (,buffer-size))
+                                              :initial-contents
+                                              (list ,@(loop repeat jobs
+                                                            collect `(make-array ,buffer-size
+                                                                                 :element-type 'ascii:ub-char)))))
+             (,line-array (make-array ,jobs :element-type '(simple-base-string ,(1- line-size))
+                                            :initial-contents
+                                            (list ,@(loop repeat jobs
+                                                          collect `(make-array ,(1- line-size)
+                                                                               :element-type 'base-char)))))
+             (,job-count 0)
+             (,file-lock ,(when threading?
+                            (bt:make-lock "gen-do-lines"))))
+         (declare (dynamic-extent ,line-array)
+                  ,@(if threading?
+                        `((type fixnum ,job-count))
+                        `((dynamic-extent ,buffer-array)
+                          (ignore ,job-count ,file-lock))))
+         (with-open-file (,ins ,(spec-path spec) :direction :input
+                                                 :element-type 'ascii:ub-char)
+           (flet ((mapper (,job-id)
+                    (declare (optimize (speed 3) (debug 0) (safety 0) (compilation-speed 0))
+                             (type fixnum ,job-id))
+                    (let ((,line-var (aref ,line-array ,job-id))
+                          (,result-var ,result-initform)
+                          (,buffer-var (aref ,buffer-array ,job-id))
+                          (,take-count 0)
+                          (,portion-id 0))
+                      (declare ,(if result-type
+                                    `(type ,result-type ,result-var)
+                                    `(ignorable ,result-var))
+                               (type (simple-base-string ,(1- line-size)) ,line-var)
+                               (ignorable ,line-var)
+                               (type (simple-array ascii:ub-char (,buffer-size)) ,buffer-var)
+                               (type fixnum ,take-count)
+                               ,(if threading?
+                                    `(type fixnum ,portion-id)
+                                    `(ignore ,portion-id)))
+                      ,(if threading?
+                           `(bt:with-lock-held (,file-lock)
+                              (setf ,take-count (floor (read-sequence ,buffer-var ,ins) ,line-size)
+                                    ,portion-id (incf ,job-count)))
+                           `(setf ,take-count (floor (read-sequence ,buffer-var ,ins)
+                                                     ,line-size)))
+                      (loop for ,offset-var fixnum from 0 by ,line-size
+                            repeat ,take-count
+                            do ,@body)
+                      ,(if threading?
+                           `(cons (cons ,portion-id ,result-var)
+                                  (when (= ,take-count ,(/ buffer-size line-size))
+                                    ,job-id))
+                           `(values ,result-var (= ,take-count
+                                                   ,(/ buffer-size line-size)))))))
+             ,(cond
+                (threading?
+                 `(let* ((result ,result-initform)
+                         (lparallel:*kernel* (lparallel:make-kernel ,jobs))
+                         (chan (lparallel:make-channel)))
+                    ,(when result-type
+                       `(declare (type ,result-type result)))
+                    (unwind-protect
+                         (progn
+                           (loop for i fixnum from 0 below ,jobs
+                                 do (lparallel:submit-task chan #'mapper i))
+                           (let ((ready-res nil)
+                                 (next 1))
+                             (declare (type list ready-res)
+                                      (type fixnum next))
+                             (loop with more? = t
+                                   while more?
+                                   do (destructuring-bind (res . job-id)
+                                          (lparallel:receive-result chan)
+                                        (if job-id
+                                            (lparallel:submit-task chan #'mapper job-id)
+                                            (setf more? nil))
+                                        (push res ready-res)
+                                        #1=(loop for res = (assoc next ready-res)
+                                                 while res
+                                                 do (locally
+                                                        (declare (type (cons fixnum ,result-type)
+                                                                       res))
+                                                      (setf result (,reduce-fn result (cdr res))
+                                                            ready-res (delete next ready-res
+                                                                              :key #'car)))
+                                                    (incf next))))
+                             (lparallel:do-fast-receives (res chan (1- ,jobs))
+                               (push (car res) ready-res)
+                               #1#)))
+                      (lparallel:end-kernel))
+                    result))
+                (reduce-fn
+                 `(let ((result ,result-initform))
+                    ,(when result-type
+                       `(declare (type ,result-type result)))
+                    (loop with more? = t
+                          while more?
+                          do (multiple-value-bind (res more) (mapper 0)
+                               (setf result (,reduce-fn result res)
+                                     more? more)))
+                    result))
+                (t `(loop with more? = t
+                          while more?
+                          do (multiple-value-bind (res more) (mapper 0)
+                               (declare (ignore res))
+                               (setf more? more)))))))))))
