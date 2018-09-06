@@ -111,7 +111,7 @@ SPEC holds field offset details."
                     :reduce-fn '+ :jobs jobs
                     :result-var 'result :result-initform 0 :result-type 'fixnum)))
 
-(proclaim '(inline append-vec))
+(declaim (inline append-vec))
 
 (defun append-vec (vec1 vec2)
   "Append VEC2 to the end of VEC1."

@@ -100,6 +100,7 @@ OFFSET-VAR is symbol representing the current offset in the db buffer."
                     :reduce-fn '+ :jobs jobs
                     :result-var 'result :result-initform 0 :result-type 'fixnum)))
 
+#-ccl
 (defmethod gen-do-lines ((spec spec-file) line-var body
                          &key (result-var (gensym)) result-type result-initform
                            (jobs 1) reduce-fn
@@ -154,19 +155,16 @@ to raw byte buffer and current line offset within it respectively."
                                     `(ignore ,portion-id)))
                       ,(if threading?
                            `(bt:with-lock-held (,file-lock)
-                              (setf ,take-count (floor (read-sequence ,buffer-var ,ins) ,line-size)
+                              (setf ,take-count (read-sequence ,buffer-var ,ins)
                                     ,portion-id (incf ,job-count)))
-                           `(setf ,take-count (floor (read-sequence ,buffer-var ,ins)
-                                                     ,line-size)))
-                      (loop for ,offset-var fixnum from 0 by ,line-size
-                            repeat ,take-count
+                           `(setf ,take-count (read-sequence ,buffer-var ,ins)))
+                      (loop for ,offset-var fixnum from 0 below ,take-count by ,line-size
                             do ,@body)
                       ,(if threading?
                            `(cons (cons ,portion-id ,result-var)
-                                  (when (= ,take-count ,(/ buffer-size line-size))
+                                  (when (= ,take-count ,buffer-size)
                                     ,job-id))
-                           `(values ,result-var (= ,take-count
-                                                   ,(/ buffer-size line-size)))))))
+                           `(values ,result-var (= ,take-count ,buffer-size))))))
              ,(cond
                 (threading?
                  `(let* ((result ,result-initform)
@@ -189,16 +187,16 @@ to raw byte buffer and current line offset within it respectively."
                                         (if job-id
                                             (lparallel:submit-task chan #'mapper job-id)
                                             (setf more? nil))
-                                        (push res ready-res)
-                                        #1=(loop for res = (assoc next ready-res)
-                                                 while res
-                                                 do (locally
-                                                        (declare (type (cons fixnum ,result-type)
-                                                                       res))
-                                                      (setf result (,reduce-fn result (cdr res))
-                                                            ready-res (delete next ready-res
-                                                                              :key #'car)))
-                                                    (incf next))))
+                                        (push res ready-res))
+                                   #1=(loop for res = (assoc next ready-res)
+                                        while res
+                                        do (locally
+                                               (declare (type (cons fixnum ,result-type)
+                                                              res))
+                                             (setf result (,reduce-fn result (cdr res))
+                                                   ready-res (delete next ready-res
+                                                                     :key #'car)))
+                                           (incf next)))
                              (lparallel:do-fast-receives (res chan (1- ,jobs))
                                (push (car res) ready-res)
                                #1#)))
@@ -219,3 +217,109 @@ to raw byte buffer and current line offset within it respectively."
                           do (multiple-value-bind (res more) (mapper 0)
                                (declare (ignore res))
                                (setf more? more)))))))))))
+
+#+ccl
+(defmethod gen-do-lines ((spec spec-file) line-var body
+                         &key (result-var (gensym)) result-type result-initform
+                           (jobs 1) reduce-fn
+                           buffer-var offset-var)
+  "File db iteration.  BUFFER-VAR and OFFSET-VAR get bound
+to raw byte buffer and current line offset within it respectively."
+  (let* ((line-size (1+ (spec-size spec)))    ;add 1 for newline
+         (buffer-size (if (< line-size *buffer-size*)
+                          (* line-size (floor *buffer-size* line-size))
+                          line-size))
+         (threading? (< 1 jobs)))
+    (alexandria:with-gensyms (buffer-array line-array take-end job-id portion-id)
+      `(let ((,buffer-array (make-array ,jobs :element-type '(simple-array ascii:ub-char
+                                                              (,buffer-size))
+                                              :initial-contents
+                                              (list ,@(loop repeat jobs
+                                                            collect `(make-array ,buffer-size
+                                                                                 :element-type 'ascii:ub-char)))))
+             (,line-array (make-array ,jobs :element-type '(simple-base-string ,(1- line-size))
+                                            :initial-contents
+                                            (list ,@(loop repeat jobs
+                                                          collect `(make-array ,(1- line-size)
+                                                                               :element-type 'base-char))))))
+         (declare ,@(if threading?
+                        `((dynamic-extent ,line-array))
+                        `((dynamic-extent ,buffer-array ,line-array))))
+         (flet ((mapper (,take-end ,job-id ,portion-id)
+                  (declare (optimize (speed 3) (debug 0) (safety 0) (compilation-speed 0))
+                           (type fixnum ,take-end ,job-id)
+                           ,(if threading?
+                                `(type fixnum ,portion-id)
+                                `(ignore ,portion-id)))
+                  (let ((,line-var (aref ,line-array ,job-id))
+                        (,result-var ,result-initform)
+                        (,buffer-var (aref ,buffer-array ,job-id)))
+                    (declare ,(if result-type
+                                  `(type ,result-type ,result-var)
+                                  `(ignorable ,result-var))
+                             (type (simple-base-string ,(1- line-size)) ,line-var)
+                             (ignorable ,line-var)
+                             (type (simple-array ascii:ub-char (,buffer-size)) ,buffer-var))
+                    (loop for ,offset-var fixnum from 0 below ,take-end by ,line-size
+                          do ,@body)
+                    ,(if threading?
+                         `(cons (cons ,portion-id ,result-var)
+                                ,job-id)
+                         result-var))))
+           (with-open-file (ins ,(spec-path spec) :direction :input
+                                                  :element-type 'ascii:ub-char)
+             ,(cond
+                (threading?
+                 `(let* ((result ,result-initform)
+                         (lparallel:*kernel* (lparallel:make-kernel ,jobs))
+                         (chan (lparallel:make-channel)))
+                    ,(when result-type
+                       `(declare (type ,result-type result)))
+                    (unwind-protect
+                         (let ((portion-count 0)
+                               (next 1)
+                               (ready-res nil))
+                           (declare (type fixnum portion-count next)
+                                    (type list ready-res))
+                           (loop for i fixnum from 0 below ,jobs
+                                 for bytes fixnum = (read-sequence (aref ,buffer-array i) ins)
+                                 until (zerop bytes)
+                                 do (lparallel:submit-task chan #'mapper bytes i
+                                                           (incf portion-count)))
+                           (when (= ,jobs portion-count)
+                             (loop with more? = t
+                                   while more?
+                                   do (destructuring-bind (res . job-id)
+                                          (lparallel:receive-result chan)
+                                        (let ((bytes (read-sequence (aref ,buffer-array job-id) ins)))
+                                          (if (zerop bytes)
+                                              (setf more? nil)
+                                              (lparallel:submit-task chan #'mapper bytes job-id
+                                                                     (incf portion-count))))
+                                        (push res ready-res))
+                                   #1=(loop for res = (assoc next ready-res)
+                                            while res
+                                            do (locally
+                                                   (declare (type (cons fixnum ,result-type)
+                                                                  res))
+                                                 (setf result (,reduce-fn result (cdr res))
+                                                       ready-res (delete next ready-res
+                                                                         :key #'car)))
+                                               (incf next)))
+                             (lparallel:do-fast-receives (res chan
+                                                              (min portion-count (1- ,jobs)))
+                               (push (car res) ready-res)
+                               #1#)))
+                      (lparallel:end-kernel))
+                    result))
+                (reduce-fn
+                 `(let ((result ,result-initform))
+                    ,(when result-type
+                       `(declare (type ,result-type result)))
+                    (loop for bytes fixnum = (read-sequence (aref ,buffer-array 0) ins)
+                          until (zerop bytes)
+                          do (setf result (,reduce-fn result (mapper bytes 0 0))))
+                    result))
+                (t `(loop for bytes fixnum = (read-sequence (aref ,buffer-array 0) ins)
+                          until (zerop bytes)
+                          do (mapper bytes 0 0))))))))))

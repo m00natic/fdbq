@@ -5,9 +5,10 @@ SQL-like operations over DBs with fields/columns with fixed number of
 ASCII bytes.  It's extensible but so far supports only flat file DBs.
 
 This is not a DB engine, each query is treated on its own without
-caches, indexes etc.  That said, it tries to generate near optimal
-specialized code which is then fed to the compiler before getting run.
-See [[https://m00natic.github.io/lisp/manual-jit.html][Uniform Structured Syntax, Metaprogramming and Run-time Compilation]].
+persistent caches, indexes etc.  That said, it tries to generate near
+optimal specialized code which is then fed to the compiler before
+getting run.  See [[https://m00natic.github.io/lisp/manual-jit.html][Uniform Structured Syntax, Metaprogramming and
+Run-time Compilation]].
 
 ** Declare DBs
 
