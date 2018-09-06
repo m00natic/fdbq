@@ -20,22 +20,36 @@ If PRINT is nil, return list of results otherwise pretty print selection."))
   "Generate selection procedure for FIELD-LIST from DB with WHERE filter.
 Default implementation using only string line."
   `(lambda () (declare (optimize (speed 3) (debug 0) (safety 0) (compilation-speed 0)))
-     ,(if (and print (= 1 jobs))
-          (gen-do-lines spec 'line
-                        ;; if where is empty, condition is considered always satisfied
-                        `((when ,(or (gen-where where 'line spec) t)
-                            ,(gen-print-selection spec field-list 'line))))
-          `(let ((res ,(gen-do-lines spec 'line
-                                     `((when ,(or (gen-where where 'line spec) t)
-                                         ,(gen-list-selection spec field-list 'line 'result)))
-                                     :reduce-fn 'append-vec :jobs jobs
-                                     :result-var 'result
-                                     :result-initform '(make-array 0 :fill-pointer t)
-                                     :result-type `(vector (simple-array simple-base-string
-                                                                         (,(length field-list)))))))
-             ,(if print
-                  (gen-print-select-results 'res (length field-list))
-                  'res)))))
+     ,(cond
+        ((and print (= 1 jobs))
+         (gen-do-lines spec 'line
+                       ;; if where is empty, condition is considered always satisfied
+                       `((when ,(or (gen-where where 'line spec) t)
+                           ,(gen-print-selection spec field-list 'line)))))
+        (print
+         (alexandria:with-gensyms (reduce-print)
+           `(flet ((,reduce-print (vec1 vec2)
+                     (declare (optimize (speed 3) (debug 0) (safety 0) (compilation-speed 0))
+                              (type (vector (simple-array simple-base-string)) vec1 vec2))
+                     ,(gen-print-select-results 'vec2 (length field-list))
+                     vec1))
+              (declare (inline ,reduce-print))
+              ,(gen-do-lines spec 'line
+                             `((when ,(or (gen-where where 'line spec) t)
+                                 ,(gen-list-selection spec field-list 'line 'result)))
+                             :reduce-fn reduce-print :jobs jobs
+                             :result-var 'result
+                             :result-initform '(make-array 0 :fill-pointer t :adjustable t)
+                             :result-type `(vector (simple-array simple-base-string
+                                                                 (,(length field-list))))))))
+        (t (gen-do-lines spec 'line
+                         `((when ,(or (gen-where where 'line spec) t)
+                             ,(gen-list-selection spec field-list 'line 'result)))
+                         :reduce-fn 'append-vec :jobs jobs
+                         :result-var 'result
+                         :result-initform '(make-array 0 :fill-pointer t :adjustable t)
+                         :result-type `(vector (simple-array simple-base-string
+                                                             (,(length field-list)))))))))
 
 (defgeneric gen-print-selection (spec fields line-var &key &allow-other-keys)
   (:documentation "Generate printing of FIELDS selection over SPEC db code.
@@ -97,7 +111,7 @@ SPEC holds field offset details."
                     :reduce-fn '+ :jobs jobs
                     :result-var 'result :result-initform 0 :result-type 'fixnum)))
 
-(declaim (inline append-vec))
+(proclaim '(inline append-vec))
 
 (defun append-vec (vec1 vec2)
   "Append VEC2 to the end of VEC1."

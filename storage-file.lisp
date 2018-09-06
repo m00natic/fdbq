@@ -17,27 +17,44 @@
 (defmethod gen-select ((spec spec-file) field-list where print jobs)
   "Generate selection procedure for FIELD-LIST from DB with WHERE filter."
   `(lambda () (declare (optimize (speed 3) (debug 0) (safety 0) (compilation-speed 0)))
-     ,(if (and print (= 1 jobs))
-          (gen-do-lines spec 'line
-                        `((when ,(or (gen-where where 'line spec 'buffer 'offset) t)
-                            ,(gen-print-selection spec field-list 'line
+     ,(cond
+        ((and print (= 1 jobs))
+         (gen-do-lines spec 'line
+                       `((when ,(or (gen-where where 'line spec 'buffer 'offset) t)
+                           ,(gen-print-selection spec field-list 'line
+                                                 :buffer-var 'buffer
+                                                 :offset-var 'offset)))
+                       :buffer-var 'buffer :offset-var 'offset))
+        (print
+         (alexandria:with-gensyms (reduce-print)
+           `(flet ((,reduce-print (vec1 vec2)
+                     (declare (optimize (speed 3) (debug 0) (safety 0) (compilation-speed 0))
+                              (type (vector (simple-array simple-base-string)) vec1 vec2))
+                     ,(gen-print-select-results 'vec2 (length field-list))
+                     vec1))
+              (declare (inline ,reduce-print))
+              ,(gen-do-lines spec 'line
+                             `((when ,(or (gen-where where 'line spec 'buffer 'offset) t)
+                                 ,(gen-list-selection spec field-list 'line 'result
+                                                      :buffer-var 'buffer
+                                                      :offset-var 'offset)))
+                             :buffer-var 'buffer :offset-var 'offset
+                             :reduce-fn reduce-print :jobs jobs
+                             :result-var 'result
+                             :result-initform '(make-array 0 :fill-pointer t :adjustable t)
+                             :result-type `(vector (simple-array simple-base-string
+                                                                 (,(length field-list))))))))
+        (t (gen-do-lines spec 'line
+                         `((when ,(or (gen-where where 'line spec 'buffer 'offset) t)
+                             ,(gen-list-selection spec field-list 'line 'result
                                                   :buffer-var 'buffer
                                                   :offset-var 'offset)))
-                        :buffer-var 'buffer :offset-var 'offset)
-          `(let ((res ,(gen-do-lines spec 'line
-                                     `((when ,(or (gen-where where 'line spec 'buffer 'offset) t)
-                                         ,(gen-list-selection spec field-list 'line 'result
-                                                              :buffer-var 'buffer
-                                                              :offset-var 'offset)))
-                                     :buffer-var 'buffer :offset-var 'offset
-                                     :reduce-fn 'append-vec :jobs jobs
-                                     :result-var 'result
-                                     :result-initform '(make-array 0 :fill-pointer t)
-                                     :result-type `(vector (simple-array simple-base-string
-                                                                         (,(length field-list)))))))
-             ,(if print
-                  (gen-print-select-results 'res (length field-list))
-                  'res)))))
+                         :buffer-var 'buffer :offset-var 'offset
+                         :reduce-fn (if print 'reduce-print 'append-vec)
+                         :jobs jobs :result-var 'result
+                         :result-initform '(make-array 0 :fill-pointer t :adjustable t)
+                         :result-type `(vector (simple-array simple-base-string
+                                                             (,(length field-list)))))))))
 
 (defmethod gen-print-selection ((spec spec-file) fields line-var
                                 &key buffer-var offset-var)

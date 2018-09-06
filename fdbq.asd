@@ -5,7 +5,7 @@
   :author "Andrey Kotlarski <m00naticus@gmail.com>"
   :license  "BSD-3"
   :version "0.3"
-  :depends-on (:cl-ppcre #:ascii-strings #:lparallel)
+  :depends-on (:cl-ppcre #:ascii-strings #:lparallel #:alexandria)
   :serial t
   :components ((:file "package")
                (:file "spec")
