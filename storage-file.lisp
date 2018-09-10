@@ -11,33 +11,29 @@
 (defmethod defspec (name (type (eql :file)) fields &key path)
   "Register file DB with NAME, list of FIELDS and file PATH."
   (let ((spec (make-instance 'spec-file :path (merge-pathnames path))))
-    (defspec-fields spec fields)
+    (defspec-read-fields spec fields)
     (setf (gethash name *dbs*) spec)))
 
 (defmethod gen-select ((spec spec-file) field-list where print jobs)
   "Generate selection procedure for FIELD-LIST from DB with WHERE filter."
-  `(lambda () (declare (optimize (speed 3) (debug 0) (safety 0) (compilation-speed 0)))
+  `(lambda () (declare ,*optimize*)
      ,(cond
         ((and print (= 1 jobs))
          (gen-do-lines spec 'line
                        `((when ,(or (gen-where where 'line spec 'buffer 'offset) t)
-                           ,(gen-print-selection spec field-list 'line
-                                                 :buffer-var 'buffer
-                                                 :offset-var 'offset)))
+                           ,(gen-print-selection field-list 'buffer 'offset)))
                        :buffer-var 'buffer :offset-var 'offset))
         (print
          (alexandria:with-gensyms (reduce-print)
            `(flet ((,reduce-print (vec1 vec2)
-                     (declare (optimize (speed 3) (debug 0) (safety 0) (compilation-speed 0))
+                     (declare ,*optimize*
                               (type (vector (simple-array simple-base-string)) vec1 vec2))
                      ,(gen-print-select-results 'vec2 (length field-list))
                      vec1))
               (declare (inline ,reduce-print))
               ,(gen-do-lines spec 'line
                              `((when ,(or (gen-where where 'line spec 'buffer 'offset) t)
-                                 ,(gen-list-selection spec field-list 'line 'result
-                                                      :buffer-var 'buffer
-                                                      :offset-var 'offset)))
+                                 ,(gen-list-selection field-list 'buffer 'result 'offset)))
                              :buffer-var 'buffer :offset-var 'offset
                              :reduce-fn reduce-print :jobs jobs
                              :result-var 'result
@@ -46,9 +42,7 @@
                                                                  (,(length field-list))))))))
         (t (gen-do-lines spec 'line
                          `((when ,(or (gen-where where 'line spec 'buffer 'offset) t)
-                             ,(gen-list-selection spec field-list 'line 'result
-                                                  :buffer-var 'buffer
-                                                  :offset-var 'offset)))
+                             ,(gen-list-selection field-list 'buffer 'result 'offset)))
                          :buffer-var 'buffer :offset-var 'offset
                          :reduce-fn (if print 'reduce-print 'append-vec)
                          :jobs jobs :result-var 'result
@@ -56,43 +50,9 @@
                          :result-type `(vector (simple-array simple-base-string
                                                              (,(length field-list)))))))))
 
-(defmethod gen-print-selection ((spec spec-file) fields line-var
-                                &key buffer-var offset-var)
-  "Unroll selected FIELDS' print statements.
-BUFFER-VAR is symbol representing the db buffer.
-OFFSET-VAR is symbol representing the current offset in the db buffer."
-  (declare (ignore line-var))
-  `(progn
-     ,@(loop for field in fields ;collect print statements in list and splice them
-             collect '(write-char #\|)
-             collect `(loop for i fixnum from (+ ,offset-var
-                                                 ,(field-offset field spec))
-                              below (+ ,offset-var ,(+ (field-offset field spec)
-                                                       (field-size field spec)))
-                            do (write-char (code-char (aref ,buffer-var i)))))
-     (format t "|~%")))
-
-(defmethod gen-list-selection ((spec spec-file) fields line-var result
-                               &key buffer-var offset-var)
-  "Unroll selected FIELDS' gather statements.
-BUFFER-VAR is symbol representing the db buffer.
-OFFSET-VAR is symbol representing the current offset in the db buffer."
-  (declare (ignore line-var))
-  `(let ((res (make-array ,(length fields))))
-     ,@(loop for field in fields
-             for i fixnum from 0
-             collect `(setf (aref res ,i)
-                            (let ((field-str (make-string ,(field-size field spec)
-                                                          :element-type 'base-char)))
-                              (loop for i fixnum from 0 below ,(field-size field spec)
-                                    for j fixnum from (+ ,offset-var ,(field-offset field spec))
-                                    do (setf (aref field-str i) (code-char (aref ,buffer-var j))))
-                              field-str)))
-     (vector-push-extend res ,result)))
-
 (defmethod gen-cnt ((spec spec-file) where jobs)
   "Generate count procedure over DB with WHERE filter over file."
-  `(lambda () (declare (optimize (speed 3) (debug 0) (safety 0) (compilation-speed 0)))
+  `(lambda () (declare ,*optimize*)
      ,(gen-do-lines spec 'line
                     `((when ,(or (gen-where where 'line spec 'buffer 'offset) t)
                         (incf result)))
@@ -136,7 +96,7 @@ to raw byte buffer and current line offset within it respectively."
          (with-open-file (,ins ,(spec-path spec) :direction :input
                                                  :element-type 'ascii:ub-char)
            (flet ((mapper (,job-id)
-                    (declare (optimize (speed 3) (debug 0) (safety 0) (compilation-speed 0))
+                    (declare ,*optimize*
                              (type fixnum ,job-id))
                     (let ((,line-var (aref ,line-array ,job-id))
                           (,result-var ,result-initform)
@@ -246,7 +206,7 @@ to raw byte buffer and current line offset within it respectively."
                         `((dynamic-extent ,line-array))
                         `((dynamic-extent ,buffer-array ,line-array))))
          (flet ((mapper (,take-end ,job-id ,portion-id)
-                  (declare (optimize (speed 3) (debug 0) (safety 0) (compilation-speed 0))
+                  (declare ,*optimize*
                            (type fixnum ,take-end ,job-id)
                            ,(if threading?
                                 `(type fixnum ,portion-id)

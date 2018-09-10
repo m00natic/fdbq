@@ -68,9 +68,8 @@ Here's what has to be done:
 
 - implement appropriate *gen-do-lines* method over this new spec class
 
-That is the minimum.  You'll have to see if the default
-implementations of *gen-select*, *gen-print-selection*,
-*gen-list-selection* and *gen-cnt* suit your *gen-do-lines*
+That is the minimum.  You'll have to check if the default
+implementations of *gen-select* and *gen-cnt* suit your *gen-do-lines*
 implementation.  The default implementations expect fully populated
 string line.
 
@@ -91,7 +90,8 @@ operations.  Here's what's available:
 - *gen-where* translates WHERE tree to concrete code; it's meant to be
   used within the body of *gen-do-lines*
 
-Look at *gen-select* for an example.
+Look at *gen-cnt* for a simple example or *gen-select* for a more
+complex one.
 
 * Future TODO
 

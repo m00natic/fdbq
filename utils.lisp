@@ -2,6 +2,9 @@
 
 (in-package #:fdbq)
 
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defvar *optimize* '(optimize (speed 3) (debug 0) (safety 0) (compilation-speed 0))))
+
 (defgeneric gen-do-lines (spec line-var body
                           &key result-var result-type result-initform
                             jobs reduce-fn &allow-other-keys)
@@ -19,24 +22,24 @@ If PRINT is nil, return list of results otherwise pretty print selection."))
 (defmethod gen-select (spec field-list where print jobs)
   "Generate selection procedure for FIELD-LIST from DB with WHERE filter.
 Default implementation using only string line."
-  `(lambda () (declare (optimize (speed 3) (debug 0) (safety 0) (compilation-speed 0)))
+  `(lambda () (declare ,*optimize*)
      ,(cond
         ((and print (= 1 jobs))
          (gen-do-lines spec 'line
                        ;; if where is empty, condition is considered always satisfied
                        `((when ,(or (gen-where where 'line spec) t)
-                           ,(gen-print-selection spec field-list 'line)))))
+                           ,(gen-print-selection field-list 'line)))))
         (print
          (alexandria:with-gensyms (reduce-print)
            `(flet ((,reduce-print (vec1 vec2)
-                     (declare (optimize (speed 3) (debug 0) (safety 0) (compilation-speed 0))
+                     (declare ,*optimize*
                               (type (vector (simple-array simple-base-string)) vec1 vec2))
                      ,(gen-print-select-results 'vec2 (length field-list))
                      vec1))
               (declare (inline ,reduce-print))
               ,(gen-do-lines spec 'line
                              `((when ,(or (gen-where where 'line spec) t)
-                                 ,(gen-list-selection spec field-list 'line 'result)))
+                                 ,(gen-list-selection field-list 'line 'result)))
                              :reduce-fn reduce-print :jobs jobs
                              :result-var 'result
                              :result-initform '(make-array 0 :fill-pointer t :adjustable t)
@@ -44,30 +47,67 @@ Default implementation using only string line."
                                                                  (,(length field-list))))))))
         (t (gen-do-lines spec 'line
                          `((when ,(or (gen-where where 'line spec) t)
-                             ,(gen-list-selection spec field-list 'line 'result)))
+                             ,(gen-list-selection field-list 'line 'result)))
                          :reduce-fn 'append-vec :jobs jobs
                          :result-var 'result
                          :result-initform '(make-array 0 :fill-pointer t :adjustable t)
                          :result-type `(vector (simple-array simple-base-string
                                                              (,(length field-list)))))))))
 
-(defgeneric gen-print-selection (spec fields line-var &key &allow-other-keys)
-  (:documentation "Generate printing of FIELDS selection over SPEC db code.
-LINE-VAR is symbol representing the current line variable.
-SPEC holds field offset details."))
+(defun get-select-fields (spec fields)
+  "Return array with field information for selected FIELDS.
+If FIELDS is empty, return all SPEC fields."
+  (if fields
+      (let ((selection (make-array (length fields)))
+            (spec-fields (spec-fields spec)))
+        (loop for i fixnum from 0 below (length selection)
+              for field in fields
+              do (setf (aref selection i) (gethash field spec-fields)))
+        selection)
+      (field-list spec)))
 
-(defmethod gen-print-selection (spec fields line-var &key &allow-other-keys)
+(defun gen-print-selection (fields line-var &optional offset-var)
   "Unroll selected FIELDS' print statements.
-LINE-VAR is symbol representing the current line variable.
-SPEC holds field offset details."
+LINE-VAR is symbol representing the current string line variable.
+If OFFSET-VAR is non-nil, then it's a symbol representing the current offset within buffer,
+LINE-VAR in this case is treated as the byte buffer."
   `(progn
-     ,@(loop for field in fields ;collect print statements in list and splice them
+     ,@(loop for field across fields
              collect '(write-char #\|)
-             collect `(write-string ,line-var nil
-                                    :start ,(field-offset field spec)
-                                    :end ,(+ (field-offset field spec)
-                                             (field-size field spec))))
+             collect
+             (if offset-var
+                 `(loop for i fixnum from (+ ,offset-var
+                                             ,(field-offset field))
+                          below (+ ,offset-var ,(+ (field-offset field)
+                                                   (field-size field)))
+                        do (write-char (code-char (aref ,line-var i))))
+                 `(write-string ,line-var nil
+                                :start ,(field-offset field)
+                                :end ,(+ (field-offset field)
+                                         (field-size field)))))
      (format t "|~%")))
+
+(defun gen-list-selection (fields line-var result &optional offset-var)
+  "Unroll selected FIELDS' gather-in RESULT statements.
+LINE-VAR is symbol representing the current line variable.
+If OFFSET-VAR is non-nil, then it's a symbol representing the current offset within buffer,
+LINE-VAR in this case is treated as the byte buffer."
+  `(let ((res (make-array ,(length fields)
+                          :element-type 'simple-base-string
+                          :initial-contents
+                          (list
+                           ,@(loop for field across fields
+                                   collect (if offset-var
+                                               `(let ((field-str (make-string ,(field-size field)
+                                                                              :element-type 'base-char)))
+                                                  (loop for i fixnum from 0 below ,(field-size field)
+                                                        for j fixnum from (+ ,offset-var ,(field-offset field))
+                                                        do (setf (aref field-str i) (code-char (aref ,line-var j))))
+                                                  field-str)
+                                               `(subseq ,line-var ,(field-offset field)
+                                                        :end ,(+ (field-offset field)
+                                                                 (field-size field)))))))))
+     (vector-push-extend res ,result)))
 
 (defun gen-print-select-results (res-var field-count)
   "Pretty print list of results."
@@ -81,29 +121,12 @@ SPEC holds field offset details."
                  `(format t ,fmt-str ,@(loop for i fixnum from 0 below field-count
                                              collect `(aref line ,i)))))))
 
-(defgeneric gen-list-selection (spec fields line-var result &key &allow-other-keys)
-  (:documentation "Generate FIELDS selection to list over SPEC db code.
-LINE-VAR is symbol representing the current line variable.
-SPEC holds field offset details."))
-
-(defmethod gen-list-selection (spec fields line-var result &key &allow-other-keys)
-  "Unroll selected FIELDS' gather statements.
-LINE-VAR is symbol representing the current line variable.
-SPEC holds field offset details."
-  `(let ((res (make-array ,(length fields) :element-type 'simple-base-string)))
-     ,@(loop for field in fields
-             for i fixnum from 0
-             collect `(setf (aref res ,i) (subseq ,line-var ,(field-offset field spec)
-                                                  :end ,(+ (field-offset field spec)
-                                                           (field-size field spec)))))
-     (vector-push-extend res ,result)))
-
 (defgeneric gen-cnt (spec where jobs)
   (:documentation "Generate count procedure for SPEC db with WHERE filter."))
 
 (defmethod gen-cnt (spec where jobs)
   "Generate count procedure over DB with WHERE filter using string line."
-  `(lambda () (declare (optimize (speed 3) (debug 0) (safety 0) (compilation-speed 0)))
+  `(lambda () (declare ,*optimize*)
      ,(gen-do-lines spec 'line
                     ;; if where is empty, condition is considered always satisfied
                     `((when ,(or (gen-where where 'line spec) t)
@@ -115,8 +138,12 @@ SPEC holds field offset details."
 
 (defun append-vec (vec1 vec2)
   "Append VEC2 to the end of VEC1."
-  (declare (optimize (speed 3) (debug 0) (safety 0) (compilation-speed 0))
+  (declare #.*optimize*
            (type (vector (simple-array simple-base-string)) vec1 vec2))
   (loop for el across vec2
         do (vector-push-extend el vec1))
   vec1)
+
+(defun run-compiled (proc)
+  "Compile and then run anonymous PROC."
+  (funcall (compile nil proc)))
