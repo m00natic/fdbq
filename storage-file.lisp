@@ -136,10 +136,11 @@ to raw byte buffer and current line offset within it respectively."
                          (progn
                            (loop for i fixnum from 0 below ,jobs
                                  do (lparallel:submit-task chan #'mapper i))
-                           (let ((ready-res nil)
+                           (let ((ready-res (make-array 0 :fill-pointer 0 :adjustable t))
                                  (next 1))
-                             (declare (type list ready-res)
-                                      (type fixnum next))
+                             (declare (type (vector (cons fixnum ,(or result-type t))) ready-res)
+                                      (type fixnum next)
+                                      (dynamic-extent ready-res))
                              (loop with more? = t
                                    while more?
                                    do (destructuring-bind (res . job-id)
@@ -147,18 +148,18 @@ to raw byte buffer and current line offset within it respectively."
                                         (if job-id
                                             (lparallel:submit-task chan #'mapper job-id)
                                             (setf more? nil))
-                                        (push res ready-res))
-                                   #1=(loop for res = (assoc next ready-res)
+                                        (vector-push-extend res ready-res))
+                                   #1=(loop for res = (find next ready-res :key #'car)
                                         while res
                                         do (locally
-                                               (declare (type (cons fixnum ,result-type)
+                                               (declare (type (cons fixnum ,(or result-type t))
                                                               res))
                                              (setf result (,reduce-fn result (cdr res))
                                                    ready-res (delete next ready-res
-                                                                     :key #'car)))
+                                                                     :key #'car :test #'=)))
                                            (incf next)))
                              (lparallel:do-fast-receives (res chan (1- ,jobs))
-                               (push (car res) ready-res)
+                               (vector-push-extend (car res) ready-res)
                                #1#)))
                       (lparallel:end-kernel))
                     result))
@@ -238,9 +239,10 @@ to raw byte buffer and current line offset within it respectively."
                     (unwind-protect
                          (let ((portion-count 0)
                                (next 1)
-                               (ready-res nil))
+                               (ready-res (make-array 0 :fill-pointer 0 :adjustable t)))
                            (declare (type fixnum portion-count next)
-                                    (type list ready-res))
+                                    (type (vector (cons fixnum ,(or result-type t))) ready-res)
+                                    (dynamic-extent ready-res))
                            (loop for i fixnum from 0 below ,jobs
                                  for bytes fixnum = (read-sequence (aref ,buffer-array i) ins)
                                  until (zerop bytes)
@@ -256,19 +258,19 @@ to raw byte buffer and current line offset within it respectively."
                                               (setf more? nil)
                                               (lparallel:submit-task chan #'mapper bytes job-id
                                                                      (incf portion-count))))
-                                        (push res ready-res))
-                                   #1=(loop for res = (assoc next ready-res)
+                                        (vector-push-extend res ready-res))
+                                   #1=(loop for res = (find next ready-res :key #'car)
                                             while res
                                             do (locally
-                                                   (declare (type (cons fixnum ,result-type)
+                                                   (declare (type (cons fixnum ,(or result-type t))
                                                                   res))
                                                  (setf result (,reduce-fn result (cdr res))
                                                        ready-res (delete next ready-res
-                                                                         :key #'car)))
+                                                                         :key #'car :test #'=)))
                                                (incf next)))
                              (lparallel:do-fast-receives (res chan
                                                               (min portion-count (1- ,jobs)))
-                               (push (car res) ready-res)
+                               (vector-push-extend (car res) ready-res)
                                #1#)))
                       (lparallel:end-kernel))
                     result))

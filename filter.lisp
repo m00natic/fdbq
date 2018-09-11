@@ -97,34 +97,33 @@ This a bit pessimistic."
   (with-slots ((offset1 offset) (size1 size)) field1
     (with-slots ((offset2 offset) (size2 size) (filter2 filter)) field2
       (cond ((null filter2) ;regex is taken from a field
-             `(progn
-                (loop for i fixnum from ,offset1
-                        below ,(+ offset1 size1)
-                      for j fixnum from (the fixnum (+ ,offset-var ,offset1))
-                      do (setf (aref ,line-var i)
-                               (code-char (aref ,buffer-var j))))
-                (loop for i fixnum from ,offset2
-                        below ,(+ offset2 size2)
-                      for j fixnum from (the fixnum (+ ,offset-var ,offset2))
-                      do (setf (aref ,line-var i)
-                               (code-char (aref ,buffer-var j))))
-                (cl-ppcre:scan (subseq ,line-var ,offset2
-                                       :end ,(+ offset2 size2))
-                               ,line-var :start ,offset1
-                               :end ,(+ offset1 size1))))
+             `(progn (loop for i fixnum from ,offset1
+                             below ,(+ offset1 size1)
+                           for j fixnum from (+ ,offset-var ,offset1)
+                           do (setf (aref ,line-var i)
+                                    (code-char (aref ,buffer-var j))))
+                     (loop for i fixnum from ,offset2
+                             below ,(+ offset2 size2)
+                           for j fixnum from (+ ,offset-var ,offset2)
+                           do (setf (aref ,line-var i)
+                                    (code-char (aref ,buffer-var j))))
+                     (cl-ppcre:scan (subseq ,line-var ,offset2
+                                            :end ,(+ offset2 size2))
+                                    ,line-var :start ,offset1
+                                    :end ,(+ offset1 size1))))
             ((simple-regex? filter2) ;use plain search instead of regex
              `(search ,(ascii:string-to-ub filter2) ,buffer-var
                       :start1 ,offset2 :end1 ,(+ offset2 size2)
-                      :start2 (the fixnum (+ ,offset-var ,offset1))
-                      :end2 (the fixnum (+ ,offset-var ,(+ offset1 size1)))))
-            (t `(progn
-                  (loop for i fixnum from ,offset1
-                          below ,(+ offset1 size1)
-                        for j fixnum from (the fixnum (+ ,offset-var ,offset1))
-                        do (setf (aref ,line-var i)
-                                 (code-char (aref ,buffer-var j))))
-                  (cl-ppcre:scan ,filter2 ,line-var :start ,offset1
-                                 :end ,(+ offset1 size1))))))))
+                      :start2 (+ ,offset-var ,offset1)
+                      :end2 (+ ,offset-var ,(+ offset1 size1))))
+            (t `(progn (loop for i fixnum from ,offset1
+                               below ,(+ offset1 size1)
+                             for j fixnum from (+ ,offset-var ,offset1)
+                             do (setf (aref ,line-var i)
+                                      (code-char (aref ,buffer-var j))))
+                       (cl-ppcre:scan ,filter2 ,line-var
+                                      :start ,offset1
+                                      :end ,(+ offset1 size1))))))))
 
 (defmethod gen-field-clause-raw (op field1 field2)
   "Generate code for a comparison clause over raw byte buffer."
@@ -132,39 +131,26 @@ This a bit pessimistic."
   (with-slots ((offset1 offset) (size1 size) (filter1 filter)) field1
     (with-slots ((offset2 offset) (size2 size) (filter2 filter)) field2
       (let ((size (min size1 size2)))
-        (cond ((= 1 size)           ;optimize single character comparison
-               (list (translate-op op t)
-                     (if filter1           ;string literal?
-                         (char-code (aref filter1 0))
-                         `(aref ,buffer-var (the fixnum (+ ,offset-var ,offset1))))
-                     (if filter2
-                         (char-code (aref filter2 0))
-                         `(aref ,buffer-var (the fixnum (+ ,offset-var ,offset2))))))
-              ((and (or filter1 filter2) (member op '(= /=)))
-               `(and ,@(loop for i from 0 below size ;unroll exact comparison
-                             collect (list op
-                                           (if filter1
-                                               (char-code (aref filter1 i))
-                                               `(aref ,buffer-var
-                                                      (the fixnum (+ ,offset-var
-                                                                     ,(+ offset1 i)))))
-                                           (if filter2
-                                               (char-code (aref filter2 i))
-                                               `(aref ,buffer-var
-                                                      (the fixnum (+ ,offset-var
-                                                                     ,(+ offset2 i)))))))))
-              (t `(,(translate-op op)
-                   ,(if filter1
-                        (ascii:string-to-ub filter1)
-                        buffer-var)
-                   ,(if filter2
-                        (ascii:string-to-ub filter2)
-                        buffer-var)
-                   ,@(if filter1
-                         (list :start1 offset1 :end1 (the fixnum (+ offset1 size)))
-                         `(:start1 (the fixnum (+ ,offset-var ,offset1))
-                           :end1 (the fixnum (+ ,offset-var ,(+ offset1 size)))))
-                   ,@(if filter2
-                         (list :start2 offset2 :end2 (the fixnum (+ offset2 size)))
-                         `(:start2 (the fixnum (+ ,offset-var ,offset2))
-                           :end2 (the fixnum (+ ,offset-var ,(+ offset2 size))))))))))))
+        (flet ((gen-field1-char (i)
+                 (if filter1              ;string literal?
+                     (char-code (aref filter1 i))
+                     `(aref ,buffer-var (+ ,offset-var ,(+ offset1 i)))))
+               (gen-field2-char (i)
+                 (if filter2
+                     (char-code (aref filter2 i))
+                     `(aref ,buffer-var (+ ,offset-var ,(+ offset2 i))))))
+          (cond ((= 1 size)           ;optimize single character comparison
+                 (list op (gen-field1-char 0) (gen-field2-char 0)))
+                ((member op '(= /=))
+                 `(and ,@(loop for i from 0 below size ;unroll exact comparison
+                               collect (list op (gen-field1-char i)
+                                             (gen-field2-char i)))))
+                (t (let ((last-i (1- size)))
+                     `(cond
+                        ,@(loop for i from 0 below last-i
+                                collect (let ((op1 (gen-field1-char i))
+                                              (op2 (gen-field2-char i)))
+                                          `((/= ,op1 ,op2)
+                                            ,(list op op1 op2))))
+                        (t ,(list op (gen-field1-char last-i)
+                                  (gen-field2-char last-i))))))))))))
