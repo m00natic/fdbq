@@ -111,15 +111,13 @@ LINE-VAR in this case is treated as the byte buffer."
 
 (defun gen-print-select-results (res-var field-count)
   "Pretty print list of results."
-  `(loop for i fixnum from 0 below (length ,res-var)
-         do (let ((line (aref ,res-var i)))
-              (declare (type (simple-array simple-base-string (,field-count)) line))
-              ,(let ((fmt-str (with-output-to-string (s nil :element-type 'base-char)
-                                (loop repeat field-count
-                                      do (write-string "|~A" s))
-                                (write-string "|~%" s))))
-                 `(format t ,fmt-str ,@(loop for i fixnum from 0 below field-count
-                                             collect `(aref line ,i)))))))
+  `(loop for line across ,res-var
+         do (locally (declare (type (simple-array simple-base-string (,field-count)) line))
+              ,@(loop for i fixnum from 0 below field-count
+                      collect '(write-char #\|)
+                      collect `(write-string (aref line ,i))))
+            (write-char #\|)
+            (terpri)))
 
 (defgeneric gen-cnt (spec where jobs)
   (:documentation "Generate count procedure for SPEC db with WHERE filter."))
